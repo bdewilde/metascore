@@ -3,9 +3,9 @@
 from dateutil import parser as date_parser
 import re
 import requests
-import urllib2
 import bs4
 import sys
+import csv
 
 KINDS = ("all", "movie", "game", "album", "tv", "person", "company")
 SORTS = ("relevancy", "recent", "score")
@@ -43,6 +43,8 @@ class MetaCritique:
 
 def clean_text_field(text):
     text = re.compile(r'\s{2,}').sub('', text).split(",")
+    for item in text :
+        item = item.encode("utf-8")
     if len(text) == 1 :
         return text[0]
     else :
@@ -56,7 +58,7 @@ def get_more_stats(tag, name):
         if data is not None :
             text = data.get_text(strip=True)
             if name=="release_date" :
-                return text
+                return text.encode("utf-8")
             else :
                 text = clean_text_field(text)
                 return text
@@ -88,10 +90,10 @@ def Search(kind="all", sort='relevancy', pages=1) :
             
             result_type = result.find("div", class_="result_type")
             if result_type is not None :
-                mc.kind = result_type.strong.get_text(strip=True).lower()
+                mc.kind = result_type.strong.get_text(strip=True).lower().encode("utf-8")
                 span = result_type.find("span")
                 if span is not None :
-                    mc.platform = span.get_text(strip=True).lower()
+                    mc.platform = span.get_text(strip=True).lower().encode("utf-8")
             
             result_wrap = result.find("div", class_="result_wrap")
             # only results with scores are useful down the line...
@@ -99,15 +101,15 @@ def Search(kind="all", sort='relevancy', pages=1) :
             
             deck = result_wrap.find("p", class_="deck basic_stat")
             if deck is not None :
-                mc.summary = deck.get_text(strip=True)
+                mc.summary = deck.get_text(strip=True).encode("utf-8")
             product_title = result_wrap.find("h3", class_="product_title basic_stat")
             if product_title is not None :
-                mc.ID = product_title.a["href"][1:].replace("/", "_")
-                mc.title = product_title.a.get_text(strip=True)
+                mc.ID = product_title.a["href"][1:].replace("/", "_").encode("utf-8")
+                mc.title = product_title.a.get_text(strip=True).encode("utf-8")
                 mc.url = "http://www.metacritic.com" + product_title.a["href"]
             metascore = result_wrap.find("span", class_="metascore")
             if metascore is not None :
-                mc.metascore = metascore.get_text(strip=True)
+                mc.metascore = metascore.get_text(strip=True).encode("utf-8")
                 
             more_stats = result_wrap.find("ul", class_="more_stats")
             if more_stats is not None :
@@ -209,8 +211,8 @@ def GetDetails(mc):
             if score_counts is not None :
                 scores = {}
                 for score in score_counts.find_all("li", class_="score_count") :
-                    key = score.find("span", class_="label").get_text(strip=True)[:-1].lower()
-                    val = score.find("span", class_="count").get_text(strip=True)
+                    key = score.find("span", class_="label").get_text(strip=True)[:-1].lower().encode("utf-8")
+                    val = score.find("span", class_="count").get_text(strip=True).encode("utf-8")
                     scores[key] = val
                 mc.critic_score_dist = scores
         user_reviews = critic_user_reviews.find("div", class_="user_reviews_module")
@@ -219,40 +221,62 @@ def GetDetails(mc):
             if score_counts is not None :
                 scores = {}
                 for score in score_counts.find_all("li", class_="score_count") :
-                    key = score.find("span", class_="label").get_text(strip=True)[:-1].lower()
-                    val = score.find("span", class_="count").get_text(strip=True)
+                    key = score.find("span", class_="label").get_text(strip=True)[:-1].lower().encode("utf-8")
+                    val = score.find("span", class_="count").get_text(strip=True).encode("utf-8")
                     scores[key] = val
                 mc.user_score_dist = scores
     
     return mc
 
 
-def SaveToCSV(sr):
-    pass
+def SaveToCSV(srs, fileName="test.csv"):
+    
+    fileOut = open(fileName, "wt")
+    fieldNames = ("index", "page", "ID", "title", "kind", "url",
+        "metascore", "critic_score_dist", "critic_count",
+        "userscore", "user_score_dist", "user_count",
+        "developer", "publisher", "record_label", "platform", "release_date",
+        "rating", "esrb", "esrb_reason",
+        "runtime", "genre", "cast", "show_type",
+        "summary")
+    writer = csv.DictWriter(fileOut, fieldnames=fieldNames, restval="NA", extrasaction="ignore")   
+    headers = dict( (n,n) for n in fieldNames )
+    writer.writerow(headers)
+    for sr in srs :
+        row = vars(sr)
+        for key, value in row.items() :
+            if value is None : row[key] = "NA"
+        writer.writerow(row)
+        
+    fileOut.close()
 
 
 if __name__ == "__main__" :
-    
+
     print "SEARCH OPTIONS"
     print "... KINDS :", KINDS
     print "... SORTS :", SORTS
     print "... PAGES : 1-50\n"
     if len(sys.argv) == 1 :
-        print "Search(type=all, sort=relevancy, pages=1)\n"
+        print "Search(type=all, sort=relevancy, pages=1)"
+        fileName = "all_relevancy_1.csv"
         search_results = Search()
     if len(sys.argv) == 2 :
-        print "Search(type="+sys.argv[1]+", sort=relevancy, pages=1)\n"
+        print "Search(type="+sys.argv[1]+", sort=relevancy, pages=1)"
+        fileName = sys.argv[1]+"relevancy_1.csv"
         search_results = Search(sys.argv[1])
     elif len(sys.argv) == 3 :
-        print "Search(type="+sys.argv[1]+", sort="+sys.argv[2]+", pages=1)\n"
+        print "Search(type="+sys.argv[1]+", sort="+sys.argv[2]+", pages=1)"
+        fileName = sys.argv[1]+"_"+sys.argv[2]+"_1.csv"
         search_results = Search(sys.argv[1], sys.argv[2])
     elif len(sys.argv) == 4 :
-        print "Search(type=" + sys.argv[1] + ", sort=" + sys.argv[2] + ", pages=" + sys.argv[3] + ")\n"
+        print "Search(type=" + sys.argv[1] + ", sort=" + sys.argv[2] + ", pages=" + sys.argv[3] + ")"
+        fileName = sys.argv[1]+"_"+sys.argv[2]+"_"+sys.argv[3]+".csv"
         search_results = Search(sys.argv[1], sys.argv[2], int(sys.argv[3]))
     #print "Number of search results:", len(search_results), "\n"
+
+    SaveToCSV(search_results, fileName=fileName)
     
-    test = search_results[0]
-    print test
     
     #for search_result in search_results :
     #print search_result, "\n"
