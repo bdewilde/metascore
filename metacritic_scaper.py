@@ -7,8 +7,22 @@ import bs4
 import sys
 import csv
 
-KINDS = ("all", "movie", "game", "album", "tv", "person", "company")
-SORTS = ("relevancy", "recent", "score")
+KINDS = ("all", "movie", "game", "album", "tv") #, "person", "company")
+SORTS = ("relevancy", "score", "recent")        
+GENRES = {"movie":("action", "adventure", "animation", "biography", "comedy", "crime",
+            "documentary", "drama", "family", "fantasy", "film-noir", "history",
+            "horror", "music", "musical", "mystery", "news", "reality-tv",
+            "romance", "sci-fi", "short", "sport", "thriller", "war", "western"),
+          "game":("action", "adventure", "fighting", "first-person", "flight", "party",
+            "platformer", "puzzle", "racing","real-time", "role-playing", "simulation",
+            "sports", "strategy", "third-person", "turn-based", "wargame", "wrestling"),
+          "album":("alt-country", "alternative", "blues", "comedy", "country", "dance",
+            "electronic", "experimental", "folk", "house", "indie", "jazz", "latin",
+            "metal", "pop", "psychedelic", "punk", "rap", "rb", "reggae", "rock",
+            "singer-songwriter", "soul", "soundtrack", "techno", "vocal", "world"),
+          "tv":("actionadventure", "animation", "children", "comedy", "drama", "game-shows",
+            "moviemini-series", "newsdocumentary", "reality", "science-fiction", "soap",
+            "sports", "talk-shows", "variety-shows")}
 
 class MetaCritique:
     def __init__(self):
@@ -71,13 +85,20 @@ def get_search_url(query, kind="all") :
     return url
 
 
-def Search(kind="all", sort='relevancy', pages=1) :
+def DoSearch(search_params) :
     
     mcs = []
     i = 0
+    params = search_params
+    pages = int(params["pages"])
+    url = "http://www.metacritic.com/search/%s/results" % params["kind"]
+    # get rid of these parameters now
+    # they mess up metacritic's search results
+    del params["kind"]
+    del params["pages"]
     for pageNum in range(0,pages) :
-        url = "http://www.metacritic.com/search/%s/results" % kind
-        params = {'search_type':'advanced', 'sort':sort, 'page':pageNum}
+        #url = "http://www.metacritic.com/search/%s/results" % params["kind"]
+        params["page"] = pageNum
         r = requests.get(url, params=params)
         print "\nPAGE =", r.url
         
@@ -139,6 +160,9 @@ def GetDetails(mc):
     main = soup.find("div", id="main", class_="main_col")
     
     content_head = main.find("div", class_="content_head")
+    # this error happens rarely -- cut and run, it's metacritic's fault
+    if content_head is None :
+        return mc
     product_title = content_head.find("div", class_="product_title")
     if product_title is not None :
         if mc.title is None :
@@ -189,7 +213,7 @@ def GetDetails(mc):
         if side_details is not None :
             developer = side_details.find("li", class_="developer")
             if developer is not None :
-                mc.developer = developer.find("span", class_="data").get_text(strip=True)
+                mc.developer = developer.find("span", class_="data").get_text(strip=True).encode("utf-8")
             product_genre = side_details.find("li", class_="product_genre")
             if mc.genre is None and product_genre is not None :
                 mc.genre = clean_text_field(product_genre.find("span", class_="data").get_text(strip=True))
@@ -237,8 +261,7 @@ def SaveToCSV(srs, fileName="test.csv"):
         "userscore", "user_score_dist", "user_count",
         "developer", "publisher", "record_label", "platform", "release_date",
         "rating", "esrb", "esrb_reason",
-        "runtime", "genre", "cast", "show_type",
-        "summary")
+        "runtime", "genre", "cast", "show_type", "summary")
     writer = csv.DictWriter(fileOut, fieldnames=fieldNames, restval="NA", extrasaction="ignore")   
     headers = dict( (n,n) for n in fieldNames )
     writer.writerow(headers)
@@ -246,35 +269,91 @@ def SaveToCSV(srs, fileName="test.csv"):
         row = vars(sr)
         for key, value in row.items() :
             if value is None : row[key] = "NA"
-        writer.writerow(row)
+        print row["ID"]
+        try :
+            writer.writerow(row)
+        except UnicodeEncodeError :
+            print row
         
     fileOut.close()
 
 
 if __name__ == "__main__" :
+    
+    print ""
+    
+    # idiot-proofing
+    try : sys.argv[1]
+    except IndexError :
+        sys.exit("ERROR: Must provide at least one argument! \"kind\" or \"help\"")
 
-    print "SEARCH OPTIONS"
-    print "... KINDS :", KINDS
-    print "... SORTS :", SORTS
-    print "... PAGES : 1-50\n"
-    if len(sys.argv) == 1 :
-        print "Search(type=all, sort=relevancy, pages=1)"
-        fileName = "all_relevancy_1.csv"
-        search_results = Search()
-    if len(sys.argv) == 2 :
-        print "Search(type="+sys.argv[1]+", sort=relevancy, pages=1)"
-        fileName = sys.argv[1]+"relevancy_1.csv"
-        search_results = Search(sys.argv[1])
-    elif len(sys.argv) == 3 :
-        print "Search(type="+sys.argv[1]+", sort="+sys.argv[2]+", pages=1)"
-        fileName = sys.argv[1]+"_"+sys.argv[2]+"_1.csv"
-        search_results = Search(sys.argv[1], sys.argv[2])
-    elif len(sys.argv) == 4 :
-        print "Search(type=" + sys.argv[1] + ", sort=" + sys.argv[2] + ", pages=" + sys.argv[3] + ")"
-        fileName = sys.argv[1]+"_"+sys.argv[2]+"_"+sys.argv[3]+".csv"
-        search_results = Search(sys.argv[1], sys.argv[2], int(sys.argv[3]))
-    #print "Number of search results:", len(search_results), "\n"
+    # helpful reminder for those who forget
+    if sys.argv[1] == "help" :
+        print "INFO: Search parameters"
+        print "\tkind =", KINDS
+        print "\tsort =", SORTS
+        print "\tpages = (1, ..., 50)"
+        print "\tgenre =", GENRES
+        print "\nExample: > python metacritic_scaper.py kind=movie sort=relevancy pages=1 genre=action"
+        sys.exit("")
+    
+    # get search parameters
+    search_params = {"search_type":"advanced"}
+    for arg in sys.argv[1:] :
+        key = arg.split("=")[0]
+        val = arg.split("=")[1]
+        if key == "kind" :
+            if val in KINDS : search_params[key] = val
+            else : print "WARNING: Invalid kind =", val
+        elif key == "sort" :
+            if val in SORTS : search_params[key] = val
+            else : print "WARNING: Invalid sort =", val
+        elif key == "pages":
+            if int(val) >= 1 and int(val) <= 50 : search_params[key] = val
+            else : print "WARNING: Invalid page =", val
+        elif key == "genre" :
+            try :
+                kind = search_params["kind"]
+            except KeyError :
+                print "WARNING: Must pass (valid) kind before genre!"
+                continue
+            if val in GENRES[search_params["kind"]] :
+                search_params["genres"] = val
+            else :
+                print "WARNING: Invalid genre", val, "for kind", kind
+        else : print "WARNING: Invalid search parameter", key
+    
+    # set defaults search parameters
+    # and construct output file name
+    fileName = ""
+    try : fileName += search_params["kind"] + "_"
+    except KeyError :
+        search_params["kind"] = "all"
+        fileName += search_params["kind"] + "_"
+    try : fileName += search_params["genres"] + "_"
+    except KeyError :
+        fileName += "all_"
+        print "WARNING: genre not specified!"
+    try : fileName += search_params["sort"] + "_"
+    except KeyError :
+        search_params["sort"] = "relevancy"
+        fileName += search_params["sort"] + "_"
+        print "WARNING: sort=relevancy by default!"
+    try : fileName += search_params["pages"] + "_"
+    except KeyError :
+        search_params["pages"] = "1"
+        fileName += search_params["pages"] + "_"
+        print "WARNING: pages=1 by default!"
+    fileName += ".csv"
+    fileName = fileName.replace("_.csv", ".csv")
+    
+    print "\nINFO: Search parameters =", search_params
+    
+    # fetch and scrape metacritic search results!
+    search_results = DoSearch(search_params)
+    print "\nINFO: Number of search results =", len(search_results)
 
+    # output in csv format for R
     SaveToCSV(search_results, fileName=fileName)
     
     
