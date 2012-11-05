@@ -175,11 +175,14 @@ def GetDetails(mc):
     soup = bs4.BeautifulSoup(r.text)
     
     main = soup.find("div", id="main", class_="main_col")
-    
-    content_head = main.find("div", class_="content_head")
-    # this error happens rarely -- cut and run, it's metacritic's fault
-    if content_head is None :
+    if main is None :
+        print "WARNING: bizarre failure at", mc.url
         return mc
+    content_head = main.find("div", class_="content_head")
+    if content_head is None :
+        print "WARNING: bizarre failure at", mc.url
+        return mc
+        
     product_title = content_head.find("div", class_="product_title")
     if product_title is not None :
         if mc.title is None :
