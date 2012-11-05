@@ -1,13 +1,13 @@
 #!/usr/bin/python
 
-from dateutil import parser as date_parser
+import bs4
+import csv
 import re
 import requests
-import bs4
 import sys
-import csv
+# from dateutil import parser as date_parser
 
-KINDS = ("all", "movie", "game", "album", "tv") #, "person", "company")
+KINDS = ("any", "movie", "game", "album", "tv") #, "person", "company")
 SORTS = ("relevancy", "score", "recent")        
 GENRES = {"movie":("action", "adventure", "animation", "biography", "comedy", "crime",
             "documentary", "drama", "family", "fantasy", "film-noir", "history",
@@ -36,8 +36,14 @@ class MetaCritique:
         self.metascore = None
         self.userscore = None
         self.critic_count = None
+        self.critic_count_positive = None
+        self.critic_count_mixed = None
+        self.critic_count_negative = None
         self.critic_score_dist = None
         self.user_count = None
+        self.user_count_positive = None
+        self.user_count_mixed = None
+        self.user_count_negative = None
         self.user_score_dist = None
         self.release_date = None
         self.genre = None
@@ -85,27 +91,28 @@ def get_search_url(query, kind="all") :
     return url
 
 
-def DoSearch(search_params) :
+def DoSearch(search_results, search_params) :
     
-    mcs = []
     i = 0
-    params = search_params
+    params = search_params.copy()
     pages = int(params["pages"])
     url = "http://www.metacritic.com/search/%s/results" % params["kind"]
     # get rid of these parameters now
     # they mess up metacritic's search results
     del params["kind"]
     del params["pages"]
+    
     for pageNum in range(0,pages) :
-        #url = "http://www.metacritic.com/search/%s/results" % params["kind"]
+        
         params["page"] = pageNum
         r = requests.get(url, params=params)
-        print "\nPAGE =", r.url
+        print "\nINFO: page =", r.url
         
         soup = bs4.BeautifulSoup(r.text)
         results = soup.find_all("li", class_="result")
         for result in results :
             mc = MetaCritique()
+            # bookkeeping...
             mc.index = i
             mc.page = pageNum
             
@@ -118,7 +125,9 @@ def DoSearch(search_params) :
             
             result_wrap = result.find("div", class_="result_wrap")
             # only results with scores are useful down the line...
-            if result_wrap.find("div", class_="basic_stats has_score") is None : continue
+            if result_wrap.find("div", class_="basic_stats has_score") is None :
+                print "NO SCORE"
+                continue
             
             deck = result_wrap.find("p", class_="deck basic_stat")
             if deck is not None :
@@ -126,6 +135,14 @@ def DoSearch(search_params) :
             product_title = result_wrap.find("h3", class_="product_title basic_stat")
             if product_title is not None :
                 mc.ID = product_title.a["href"][1:].replace("/", "_").encode("utf-8")
+                # a necessary check for duplicates
+                # quit now if this is already included
+                duplicate = False
+                for search_result in search_results :
+                    if mc.ID == search_result.ID : duplicate = True
+                if duplicate is True :
+                    print "DUPLICATE"
+                    continue
                 mc.title = product_title.a.get_text(strip=True).encode("utf-8")
                 mc.url = "http://www.metacritic.com" + product_title.a["href"]
             metascore = result_wrap.find("span", class_="metascore")
@@ -143,11 +160,11 @@ def DoSearch(search_params) :
                 mc.cast = get_more_stats(more_stats, "cast")
                 mc.genre = get_more_stats(more_stats, "genre")
             
-            mc = GetDetails(mc)    
-            mcs.append(mc)
+            mc = GetDetails(mc)
+            search_results.append(mc)
             i += 1
-            
-    return mcs
+    
+    return search_results
 
 
 def GetDetails(mc):
@@ -234,9 +251,16 @@ def GetDetails(mc):
             score_counts = critic_reviews.find("ol", class_="score_counts")
             if score_counts is not None :
                 scores = {}
+                # this feels clunky, but whatchagonnado
                 for score in score_counts.find_all("li", class_="score_count") :
                     key = score.find("span", class_="label").get_text(strip=True)[:-1].lower().encode("utf-8")
                     val = score.find("span", class_="count").get_text(strip=True).encode("utf-8")
+                    if key == "positive" :
+                        mc.critic_count_positive = val
+                    elif key == "mixed" :
+                        mc.critic_count_mixed = val
+                    elif key== "negative" :
+                        mc.critic_count_negative = val
                     scores[key] = val
                 mc.critic_score_dist = scores
         user_reviews = critic_user_reviews.find("div", class_="user_reviews_module")
@@ -247,6 +271,12 @@ def GetDetails(mc):
                 for score in score_counts.find_all("li", class_="score_count") :
                     key = score.find("span", class_="label").get_text(strip=True)[:-1].lower().encode("utf-8")
                     val = score.find("span", class_="count").get_text(strip=True).encode("utf-8")
+                    if key == "positive" :
+                        mc.user_count_positive = val
+                    elif key == "mixed" :
+                        mc.user_count_mixed = val
+                    elif key== "negative" :
+                        mc.user_count_negative = val
                     scores[key] = val
                 mc.user_score_dist = scores
     
@@ -255,10 +285,14 @@ def GetDetails(mc):
 
 def SaveToCSV(srs, fileName="test.csv"):
     
+    print "\nINFO: Saving to file =", fileName
+    
     fileOut = open(fileName, "wt")
     fieldNames = ("index", "page", "ID", "title", "kind", "url",
-        "metascore", "critic_score_dist", "critic_count",
-        "userscore", "user_score_dist", "user_count",
+        "metascore", "critic_count", #"critic_score_dist",
+        "critic_count_positive", "critic_count_mixed", "critic_count_negative", 
+        "userscore", "user_count", #"user_score_dist",
+        "user_count_positive", "user_count_mixed", "user_count_negative", 
         "developer", "publisher", "record_label", "platform", "release_date",
         "rating", "esrb", "esrb_reason",
         "runtime", "genre", "cast", "show_type", "summary")
@@ -267,14 +301,15 @@ def SaveToCSV(srs, fileName="test.csv"):
     writer.writerow(headers)
     for sr in srs :
         row = vars(sr)
+        #print "... ID =", row["ID"]
         for key, value in row.items() :
             if value is None : row[key] = "NA"
-        print row["ID"]
         try :
             writer.writerow(row)
         except UnicodeEncodeError :
-            print row
+            print "\nERROR: UnicodeEncode\n", row
         
+    print "INFO: File", fileName, "saved"
     fileOut.close()
 
 
@@ -293,8 +328,8 @@ if __name__ == "__main__" :
         print "\tkind =", KINDS
         print "\tsort =", SORTS
         print "\tpages = (1, ..., 50)"
-        print "\tgenre =", GENRES
-        print "\nExample: > python metacritic_scaper.py kind=movie sort=relevancy pages=1 genre=action"
+        print "\tgenres =", GENRES
+        print "\nExample: > python metacritic_scaper.py kind=movie sort=relevancy pages=1 genres=action"
         sys.exit("")
     
     # get search parameters
@@ -311,16 +346,18 @@ if __name__ == "__main__" :
         elif key == "pages":
             if int(val) >= 1 and int(val) <= 50 : search_params[key] = val
             else : print "WARNING: Invalid page =", val
-        elif key == "genre" :
+        elif key == "genres" :
             try :
                 kind = search_params["kind"]
             except KeyError :
-                print "WARNING: Must pass (valid) kind before genre!"
+                print "WARNING: Must pass (valid) kind before genres!"
                 continue
-            if val in GENRES[search_params["kind"]] :
-                search_params["genres"] = val
+            if val in GENRES[kind] :
+                search_params[key] = val
+            elif val == "all" :
+                search_params[key] = GENRES[kind]
             else :
-                print "WARNING: Invalid genre", val, "for kind", kind
+                print "WARNING: Invalid genres", val, "for kind", kind
         else : print "WARNING: Invalid search parameter", key
     
     # set defaults search parameters
@@ -331,8 +368,10 @@ if __name__ == "__main__" :
         search_params["kind"] = "all"
         fileName += search_params["kind"] + "_"
     try : fileName += search_params["genres"] + "_"
-    except KeyError :
+    except TypeError :
         fileName += "all_"
+    except KeyError :
+        fileName += "any_"
         print "WARNING: genre not specified!"
     try : fileName += search_params["sort"] + "_"
     except KeyError :
@@ -350,12 +389,19 @@ if __name__ == "__main__" :
     print "\nINFO: Search parameters =", search_params
     
     # fetch and scrape metacritic search results!
-    search_results = DoSearch(search_params)
+    search_results = []
+    # HACK: special case for genres=all
+    if isinstance(search_params["genres"], tuple) is True :
+        for genre in search_params["genres"] :
+            search_params_copy = search_params.copy()
+            search_params_copy["genres"] = genre
+            search_results = DoSearch(search_results, search_params_copy)
+    else :
+        search_results = DoSearch(search_results, search_params)
+        
     print "\nINFO: Number of search results =", len(search_results)
 
     # output in csv format for R
     SaveToCSV(search_results, fileName=fileName)
     
-    
-    #for search_result in search_results :
-    #print search_result, "\n"
+
